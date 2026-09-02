@@ -19,6 +19,10 @@
         .intro { margin: 0 0 25px; color: var(--muted); }
         .label { display: block; margin: 18px 0 8px; font-size: .82rem; font-weight: 700; }
         .input { width: 100%; padding: 14px; border: 1px solid var(--line); border-radius: 9px; outline: 0; font: inherit; }
+        .password-field { position: relative; }
+        .password-field .input { padding-right: 48px; }
+        .password-toggle { position: absolute; top: 50%; right: 7px; display: grid; place-items: center; width: 36px; height: 36px; border: 0; border-radius: 7px; color: var(--muted); background: transparent; cursor: pointer; transform: translateY(-50%); }
+        .password-toggle:hover, .password-toggle:focus-visible { color: var(--green); background: rgba(8,127,103,.08); outline: 0; }
         .input:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(8,127,103,.1); }
         .error { color: #c64c3d; font-size: .78rem; }
         .submit { width: 100%; margin-top: 25px; padding: 14px; border: 0; border-radius: 9px; color: #fff; background: var(--green); cursor: pointer; font: 700 .9rem 'DM Sans', sans-serif; }
@@ -38,12 +42,25 @@
             <input class="input" id="email" name="email" type="email" value="{{ old('email', $email) }}" autocomplete="email" required>
             @error('email')<p class="error">{{ $message }}</p>@enderror
             <label class="label" for="password">New password</label>
-            <input class="input" id="password" name="password" type="password" autocomplete="new-password" required>
+            <div class="password-field"><input class="input" id="password" name="password" type="password" autocomplete="new-password" required><button class="password-toggle" type="button" data-password-toggle="password" aria-label="Show password" aria-pressed="false"><i class="bi bi-eye" aria-hidden="true"></i></button></div>
             @error('password')<p class="error">{{ $message }}</p>@enderror
             <label class="label" for="password_confirmation">Confirm new password</label>
-            <input class="input" id="password_confirmation" name="password_confirmation" type="password" autocomplete="new-password" required>
+            <div class="password-field"><input class="input" id="password_confirmation" name="password_confirmation" type="password" autocomplete="new-password" required><button class="password-toggle" type="button" data-password-toggle="password_confirmation" aria-label="Show confirmation password" aria-pressed="false"><i class="bi bi-eye" aria-hidden="true"></i></button></div>
             <button class="submit" type="submit">Reset password <i class="bi bi-arrow-right" aria-hidden="true"></i></button>
         </form>
     </main>
+    <script>
+        document.querySelectorAll('[data-password-toggle]').forEach((button) => {
+            button.addEventListener('click', () => {
+                const input = document.getElementById(button.dataset.passwordToggle);
+                const isHidden = input.type === 'password';
+                input.type = isHidden ? 'text' : 'password';
+                const fieldName = input.id === 'password_confirmation' ? 'confirmation password' : 'password';
+                button.setAttribute('aria-label', `${isHidden ? 'Hide' : 'Show'} ${fieldName}`);
+                button.setAttribute('aria-pressed', String(isHidden));
+                button.querySelector('i').className = isHidden ? 'bi bi-eye-slash' : 'bi bi-eye';
+            });
+        });
+    </script>
 </body>
 </html>
