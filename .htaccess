@@ -1,0 +1,16 @@
+#+PHPVersion
+#=php83
+AddHandler x-httpd-php83 .php
+#-PHPVersion
+
+DirectoryIndex index.php
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    RewriteCond %{REQUEST_URI} !^/laravel12/public/
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^(.*)$ laravel12/public/$1 [L]
+</IfModule>
+

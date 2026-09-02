@@ -1,0 +1,351 @@
+==============================================
+COPY ALL CONTROLLER METHODS - PASTE INTO EACH CONTROLLER
+==============================================
+
+Add these use statements at top of each controller:
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Storage;
+use App\Models\{User, Job, Category, JobApplication, Employer, JobSeekerProfile};
+
+==============================================
+Auth/LoginController.php
+==============================================
+public function showLoginForm() {
+    return view('auth.login');
+}
+
+public function login(\Illuminate\Http\Request $request) {
+    $credentials = $request->validate([
+        'email' => 'required|email',
+        'password' => 'required',
+    ]);
+    
+    if (Auth::attempt($credentials, $request->filled('remember'))) {
+        $request->session()->regenerate();
+        return match(auth()->user()->role) {
+            'admin' => redirect()->route('admin.dashboard'),
+            'moderator' => redirect()->route('moderator.dashboard'),
+            'employer' => redirect()->route('employer.dashboard'),
+            'job_seeker' => redirect()->route('job-seeker.dashboard'),
+            default => redirect()->route('home'),
+        };
+    }
+    
+    return back()->withErrors(['email' => 'Invalid credentials']);
+}
+
+public function logout(\Illuminate\Http\Request $request) {
+    Auth::logout();
+    $request->session()->invalidate();
+    $request->session()->regenerateToken();
+    return redirect()->route('home');
+}
+
+==============================================
+Auth/RegisterController.php
+==============================================
+public function showRegistrationForm() {
+    return view('auth.register');
+}
+
+public function register(\Illuminate\Http\Request $request) {
+    $validated = $request->validate([
+        'name' => 'required|string|max:255',
+        'email' => 'required|email|unique:users',
+        'password' => 'required|min:8|confirmed',
+        'role' => 'required|in:job_seeker,employer',
+    ]);
+    
+    $user = User::create([
+        'name' => $validated['name'],
+        'email' => $validated['email'],
+        'password' => Hash::make($validated['password']),
+        'role' => $validated['role'],
+    ]);
+    
+    if ($user->role == 'employer') {
+        Employer::create(['user_id' => $user->id, 'company_name' => $user->name]);
+    } else {
+        JobSeekerProfile::create(['user_id' => $user->id]);
+    }
+    
+    Auth::login($user);
+    return redirect()->route($user->role == 'employer' ? 'employer.dashboard' : 'job-seeker.dashboard');
+}
+
+==============================================
+JobController.php
+==============================================
+public function index(\Illuminate\Http\Request $request) {
+    $query = Job::where('status', 'approved')->with(['employer', 'category']);
+    
+    if ($request->search) $query->where('title', 'like', '%'.$request->search.'%');
+    if ($request->location) $query->where('location', 'like', '%'.$request->location.'%');
+    if ($request->category) $query->where('category_id', $request->category);
+    
+    $jobs = $query->latest()->paginate(12);
+    $categories = Category::all();
+    return view('jobs.index', compact('jobs', 'categories'));
+}
+
+public function show(Job $job) {
+    $job->increment('views_count');
+    $hasApplied = auth()->check() && JobApplication::where(['job_id' => $job->id, 'user_id' => auth()->id()])->exists();
+    return view('jobs.show', compact('job', 'hasApplied'));
+}
+
+==============================================
+JobSeekerController.php
+==============================================
+public function dashboard() {
+    $recent_applications = JobApplication::where('user_id', auth()->id())->with('job.employer')->latest()->take(5)->get();
+    $stats = [
+        'total_applications' => JobApplication::where('user_id', auth()->id())->count(),
+        'pending' => JobApplication::where(['user_id' => auth()->id(), 'status' => 'pending'])->count(),
+        'accepted' => JobApplication::where(['user_id' => auth()->id(), 'status' => 'accepted'])->count(),
+        'rejected' => JobApplication::where(['user_id' => auth()->id(), 'status' => 'rejected'])->count(),
+    ];
+    return view('job-seeker.dashboard', compact('recent_applications', 'stats'));
+}
+
+public function profile() {
+    $profile = auth()->user()->jobSeekerProfile;
+    return view('job-seeker.profile', compact('profile'));
+}
+
+public function updateProfile(\Illuminate\Http\Request $request) {
+    $request->validate(['name' => 'required|string|max:255']);
+    
+    auth()->user()->update($request->only(['name', 'phone', 'location']));
+    
+    $profile = auth()->user()->jobSeekerProfile;
+    if (!$profile) $profile = JobSeekerProfile::create(['user_id' => auth()->id()]);
+    
+    $profile->update($request->only(['skills', 'experience', 'education']));
+    
+    if ($request->hasFile('resume')) {
+        $path = $request->file('resume')->store('resumes', 'public');
+        $profile->update(['resume_path' => $path]);
+    }
+    
+    return back()->with('success', 'Profile updated!');
+}
+
+public function applications() {
+    $applications = JobApplication::where('user_id', auth()->id())->with('job.employer')->latest()->get();
+    return view('job-seeker.applications', compact('applications'));
+}
+
+public function showApplyForm(Job $job) {
+    return view('job-seeker.apply', compact('job'));
+}
+
+public function apply(\Illuminate\Http\Request $request, Job $job) {
+    $request->validate(['cover_letter' => 'required|string']);
+    
+    $data = [
+        'job_id' => $job->id,
+        'user_id' => auth()->id(),
+        'cover_letter' => $request->cover_letter,
+    ];
+    
+    if ($request->hasFile('resume')) {
+        $data['resume_path'] = $request->file('resume')->store('resumes', 'public');
+    } else {
+        $profile = auth()->user()->jobSeekerProfile;
+        if ($profile) $data['resume_path'] = $profile->resume_path;
+    }
+    
+    JobApplication::create($data);
+    return redirect()->route('job-seeker.applications')->with('success', 'Application submitted!');
+}
+
+==============================================
+EmployerController.php
+==============================================
+public function dashboard() {
+    $recent_jobs = Job::where('employer_id', auth()->id())->with('applications')->latest()->take(5)->get();
+    $stats = [
+        'total_jobs' => Job::where('employer_id', auth()->id())->count(),
+        'active_jobs' => Job::where(['employer_id' => auth()->id(), 'status' => 'approved'])->count(),
+        'pending_jobs' => Job::where(['employer_id' => auth()->id(), 'status' => 'pending'])->count(),
+        'total_applications' => JobApplication::whereIn('job_id', Job::where('employer_id', auth()->id())->pluck('id'))->count(),
+    ];
+    return view('employer.dashboard', compact('recent_jobs', 'stats'));
+}
+
+public function profile() {
+    $employer = auth()->user()->employer;
+    return view('employer.profile', compact('employer'));
+}
+
+public function updateProfile(\Illuminate\Http\Request $request) {
+    $employer = auth()->user()->employer;
+    if (!$employer) $employer = Employer::create(['user_id' => auth()->id()]);
+    
+    $employer->update($request->only(['company_name', 'company_description', 'industry', 'website']));
+    
+    if ($request->hasFile('company_logo')) {
+        $path = $request->file('company_logo')->store('logos', 'public');
+        $employer->update(['company_logo' => $path]);
+    }
+    
+    return back()->with('success', 'Profile updated!');
+}
+
+public function index() {
+    $jobs = Job::where('employer_id', auth()->id())->with('category', 'applications')->latest()->get();
+    return view('employer.jobs.index', compact('jobs'));
+}
+
+public function create() {
+    $categories = Category::all();
+    return view('employer.jobs.create', compact('categories'));
+}
+
+public function store(\Illuminate\Http\Request $request) {
+    $validated = $request->validate([
+        'title' => 'required|string|max:255',
+        'category_id' => 'required|exists:categories,id',
+        'description' => 'required|string',
+        'location' => 'required|string',
+        'job_type' => 'required|in:full-time,part-time,contract,remote',
+    ]);
+    
+    $validated['employer_id'] = auth()->id();
+    $validated['status'] = 'pending';
+    
+    Job::create($validated);
+    return redirect()->route('employer.jobs.index')->with('success', 'Job posted! Awaiting approval.');
+}
+
+public function edit(Job $job) {
+    abort_if($job->employer_id != auth()->id(), 403);
+    $categories = Category::all();
+    return view('employer.jobs.edit', compact('job', 'categories'));
+}
+
+public function update(\Illuminate\Http\Request $request, Job $job) {
+    abort_if($job->employer_id != auth()->id(), 403);
+    $job->update($request->all());
+    return redirect()->route('employer.jobs.index')->with('success', 'Job updated!');
+}
+
+public function destroy(Job $job) {
+    abort_if($job->employer_id != auth()->id(), 403);
+    $job->delete();
+    return back()->with('success', 'Job deleted!');
+}
+
+public function applications(Job $job) {
+    abort_if($job->employer_id != auth()->id(), 403);
+    $applications = $job->applications()->with('user')->get();
+    return view('employer.jobs.applications', compact('job', 'applications'));
+}
+
+public function acceptApplication(JobApplication $application) {
+    $application->update(['status' => 'accepted']);
+    return back()->with('success', 'Application accepted!');
+}
+
+public function rejectApplication(JobApplication $application) {
+    $application->update(['status' => 'rejected']);
+    return back()->with('success', 'Application rejected!');
+}
+
+==============================================
+AdminController.php
+==============================================
+public function dashboard() {
+    $stats = [
+        'total_users' => User::count(),
+        'total_jobs' => Job::count(),
+        'pending_jobs' => Job::where('status', 'pending')->count(),
+        'total_applications' => JobApplication::count(),
+    ];
+    return view('admin.dashboard', compact('stats'));
+}
+
+public function users() {
+    $users = User::latest()->get();
+    return view('admin.users', compact('users'));
+}
+
+public function updateUserStatus(User $user) {
+    $user->update(['status' => $user->status == 'active' ? 'suspended' : 'active']);
+    return back()->with('success', 'User status updated!');
+}
+
+public function destroyUser(User $user) {
+    $user->delete();
+    return back()->with('success', 'User deleted!');
+}
+
+public function jobs() {
+    $jobs = Job::with('employer', 'category')->latest()->get();
+    return view('admin.jobs', compact('jobs'));
+}
+
+public function approveJob(Job $job) {
+    $job->update(['status' => 'approved']);
+    return back()->with('success', 'Job approved!');
+}
+
+public function rejectJob(Job $job) {
+    $job->update(['status' => 'rejected']);
+    return back()->with('success', 'Job rejected!');
+}
+
+public function destroyJob(Job $job) {
+    $job->delete();
+    return back()->with('success', 'Job deleted!');
+}
+
+public function categories() {
+    $categories = Category::withCount('jobs')->get();
+    return view('admin.categories', compact('categories'));
+}
+
+public function storeCategory(\Illuminate\Http\Request $request) {
+    $validated = $request->validate(['name' => 'required|string|unique:categories']);
+    $validated['slug'] = \Illuminate\Support\Str::slug($validated['name']);
+    Category::create($validated);
+    return back()->with('success', 'Category created!');
+}
+
+public function destroyCategory(Category $category) {
+    $category->delete();
+    return back()->with('success', 'Category deleted!');
+}
+
+==============================================
+ModeratorController.php
+==============================================
+public function dashboard() {
+    $stats = [
+        'pending_jobs' => Job::where('status', 'pending')->count(),
+        'approved_today' => Job::where('status', 'approved')->whereDate('updated_at', today())->count(),
+        'rejected_today' => Job::where('status', 'rejected')->whereDate('updated_at', today())->count(),
+    ];
+    return view('moderator.dashboard', compact('stats'));
+}
+
+public function jobs() {
+    $jobs = Job::where('status', 'pending')->with('employer')->latest()->get();
+    return view('moderator.jobs', compact('jobs'));
+}
+
+public function approveJob(Job $job) {
+    $job->update(['status' => 'approved']);
+    return back()->with('success', 'Job approved!');
+}
+
+public function rejectJob(Job $job) {
+    $job->update(['status' => 'rejected']);
+    return back()->with('success', 'Job rejected!');
+}
+
+==============================================
+DONE! Copy methods into respective controllers.
+==============================================
