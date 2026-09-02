@@ -24,3 +24,9 @@
 Thumbs.db
 .vscode/
 .idea/
+
+# Personal hosting and deployment notes (kept locally)
+CPANEL_SETUP.md
+DEPLOYMENT_INSTRUCTIONS.md
+FORBIDDEN_FIX.md
+IMPLEMENTATION_GUIDE.md
